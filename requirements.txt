@@ -1,0 +1,6 @@
+numpy
+pandas
+tensorflow[and-cuda]
+matplotlib
+optuna
+tqdm
