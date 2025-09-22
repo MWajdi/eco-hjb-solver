@@ -1,0 +1,64 @@
+{
+    "model_parameters": {
+        "mu": 0.05,
+        "sigma": 0.05,
+        "a": 0.05,
+        "b": 0.2,
+        "r": 0.05,
+        "T": 1.0,
+        "L": 0.5,
+        "kappa": 2.0,
+        "beta": 2.0,
+        "delta": 0.3,
+        "rho": -0.5,
+        "pi": "sqrt(P)",
+        "model_type": "CIR_4D"
+    },
+    "network_parameters": {
+        "n_layers": 9,
+        "layer_width": 256,
+        "input_dim": 3
+    },
+    "training_parameters": {
+        "seed": 3,
+        "dtype": "float64",
+        "lr_base": 0.00025855787701368083,
+        "lr_log_delta": 0.34810916380573426,
+        "lr_schedule_f": {
+            "initial_learning_rate": 0.0005763243073268281,
+            "decay_steps": 250,
+            "decay_rate": 0.9
+        },
+        "lr_schedule_g": {
+            "initial_learning_rate": 0.00011599749466737392,
+            "decay_steps": 100,
+            "decay_rate": 0.99
+        },
+        "batch_size": 3584,
+        "candidate_size": 100000,
+        "resample_every": 400,
+        "k_start": 1.4,
+        "k_end": 4.0,
+        "k_schedule_steps": 8000
+    },
+    "domain_bounds": {
+        "t": [
+            0.0,
+            1.0
+        ],
+        "P": [
+            0.1,
+            10.0
+        ],
+        "Y": [
+            0.0,
+            10.25
+        ],
+        "C": [
+            0.1,
+            5.0
+        ]
+    },
+    "V_scale": 3.0000000000000004,
+    "alpha_scale": 1.6410100943876436
+}

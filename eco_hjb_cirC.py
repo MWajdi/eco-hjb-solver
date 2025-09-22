@@ -808,7 +808,7 @@ def main():
     rho = tf.constant(args.rho, dtype=dtype)
 
     # 4D domain bounds: [t, P, Y, C]
-    Y_max = args.beta * (a + b * tf.constant(10.0, dtype=dtype)) * T  # Conservative upper bound for Y
+    Y_max = args.C_max * (a + b * tf.constant(10.0, dtype=dtype)) * T  # upper bound for Y
     domain_bounds = [
         (0.0, T.numpy()),           # t bounds
         (0.1, 10.0),               # P bounds
