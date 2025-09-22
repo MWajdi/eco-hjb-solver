@@ -3,7 +3,7 @@
 """
 Multi-objective Optuna tuning for the 4-D HJB solver (Policy-Iteration-Aux).
 Extended for CIR process where C_t follows dC_t = κ(β - C_t)dt + δ√C_t dB_t
-(Full file with NaN-safe sampling + snapshot rollback via weights.)
+(Simplified version with reduced hyperparameters)
 """
 # ---------------------------------------------------------------------------
 
@@ -38,13 +38,12 @@ def pi(P):  # running payoff
 
 
 # ---------------------------------------------------------------------------
-#  P I A   trainer (4D version)
+#  P I A   trainer (4D version) - Simplified
 # ---------------------------------------------------------------------------
 class PIATrainer4D:
     def __init__(self, value_model, control_model, optimizer_f, optimizer_g,
-                 domain_bounds, batch_size=2048, candidate_size=50000,
-                 resample_every=1000, k_start=1.0, k_end=5.0, k_schedule_steps=4000,
-                V_scale=1.0, alpha_scale=1.0, dtype="float32"):
+                 domain_bounds, batch_size=2816, candidate_size=50000,
+                 resample_every=1000, dtype="float32"):
 
         # accept str or tf.DType
         if isinstance(dtype, str):
@@ -63,9 +62,10 @@ class PIATrainer4D:
         self.candidate_size = candidate_size
         self.resample_every = resample_every
 
-        self.k_start = k_start
-        self.k_end = k_end
-        self.k_schedule_steps = k_schedule_steps
+        # Fixed k schedule
+        self.k_start = 1.0
+        self.k_end = 4.0
+        self.k_schedule_steps = 5000
 
         self.T = domain_bounds[0][1]
         self.terminal_bounds = domain_bounds[1:]  # P, Y, C bounds for terminal condition
@@ -73,10 +73,6 @@ class PIATrainer4D:
 
         # Initialize normalization parameters
         self._setup_normalization()
-
-        # Scaling constants for change of variables
-        self.V_scale = tf.constant(V_scale, dtype=self.dtype)
-        self.alpha_scale = tf.constant(alpha_scale, dtype=self.dtype)
 
         self.history = {
             "total_loss": [],
@@ -167,10 +163,8 @@ class PIATrainer4D:
 
     def get_V_and_alpha(self, t, P, Y, C):
         t_norm, P_norm, Y_norm, C_norm = self.normalize_inputs(t, P, Y, C)
-        V_tilde = self.f_theta(t_norm, tf.concat([P_norm, Y_norm, C_norm], axis=1))
-        alpha_tilde = self.g_phi(t_norm, tf.concat([P_norm, Y_norm, C_norm], axis=1))
-        V = self.V_scale * V_tilde
-        alpha = self.alpha_scale * alpha_tilde
+        V = self.f_theta(t_norm, tf.concat([P_norm, Y_norm, C_norm], axis=1))
+        alpha = self.g_phi(t_norm, tf.concat([P_norm, Y_norm, C_norm], axis=1))
         return V, alpha
 
     def get_scheduled_k(self, step):
@@ -184,71 +178,66 @@ class PIATrainer4D:
             with tf.GradientTape(persistent=True) as tape1:
                 tape1.watch([t, P, Y, C])
                 t_norm, P_norm, Y_norm, C_norm = self.normalize_inputs(t, P, Y, C)
-                alpha_tilde = self.g_phi(t_norm, tf.concat([P_norm, Y_norm, C_norm], axis=1))
-                V_tilde = self.f_theta(t_norm, tf.concat([P_norm, Y_norm, C_norm], axis=1))
-            V_tilde_t = tape1.gradient(V_tilde, t)
-            V_tilde_P = tape1.gradient(V_tilde, P)
-            V_tilde_Y = tape1.gradient(V_tilde, Y)
-            V_tilde_C = tape1.gradient(V_tilde, C)
+                alpha = self.g_phi(t_norm, tf.concat([P_norm, Y_norm, C_norm], axis=1))
+                V = self.f_theta(t_norm, tf.concat([P_norm, Y_norm, C_norm], axis=1))
+            V_t = tape1.gradient(V, t)
+            V_P = tape1.gradient(V, P)
+            V_Y = tape1.gradient(V, Y)
+            V_C = tape1.gradient(V, C)
             del tape1
-        V_tilde_PP = tape2.gradient(V_tilde_P, P)
-        V_tilde_CC = tape2.gradient(V_tilde_C, C)
-        V_tilde_PC = tape2.gradient(V_tilde_P, C)  # Mixed derivative ∂²V/∂P∂C
+        V_PP = tape2.gradient(V_P, P)
+        V_CC = tape2.gradient(V_C, C)
+        V_PC = tape2.gradient(V_P, C)  # Mixed derivative ∂²V/∂P∂C
         del tape2
 
-
         # Safe second derivatives
-        V_tilde_PP_safe = self._safe_pp(V_tilde_PP, eps=1e-5)
-        V_tilde_CC_safe = self._safe_cc(V_tilde_CC, eps=1e-5)
+        V_PP_safe = self._safe_pp(V_PP, eps=1e-5)
+        V_CC_safe = self._safe_cc(V_CC, eps=1e-5)
 
-        # Convert to original units
-        alpha_tilde = tf.cast(alpha_tilde, self.dtype)
-        alpha_orig = self.alpha_scale * alpha_tilde
+        # Convert to original units (no scaling needed now)
+        alpha = tf.cast(alpha, self.dtype)
 
         # HJB equation terms (4D version with CIR dynamics)
         # Main drift and diffusion from P dynamics
-        drift_P = mu * alpha_orig * P * V_tilde_P
-        diffusion_P = (sigma**2 * alpha_orig**2 * P**2 * V_tilde_PP_safe) / tf.constant(2.0, dtype=self.dtype)
+        drift_P = mu * alpha * P * V_P
+        diffusion_P = (sigma**2 * alpha**2 * P**2 * V_PP_safe) / tf.constant(2.0, dtype=self.dtype)
         
         # Mixed term from correlation between P and C processes
-        mixed_PC = rho * sigma * delta * alpha_orig * P * tf.sqrt(tf.maximum(C, tf.constant(1e-8, dtype=self.dtype))) * V_tilde_PC
+        mixed_PC = rho * sigma * delta * alpha * P * tf.sqrt(tf.maximum(C, tf.constant(1e-8, dtype=self.dtype))) * V_PC
         
         # Y dynamics (integral of C(a + bP))
-        advec_Y = C * (a + b * P) * V_tilde_Y
+        advec_Y = C * (a + b * P) * V_Y
         
         # CIR dynamics for C
-        drift_C = kappa * (beta - C) * V_tilde_C
-        diffusion_C = (delta**2 * C * V_tilde_CC_safe) / tf.constant(2.0, dtype=self.dtype)
+        drift_C = kappa * (beta - C) * V_C
+        diffusion_C = (delta**2 * C * V_CC_safe) / tf.constant(2.0, dtype=self.dtype)
         
         # Source term
-        source_term = pi(P) / self.V_scale
+        source_term = pi(P)
 
-        V_tilde = tf.cast(V_tilde, self.dtype)
+        V = tf.cast(V, self.dtype)
         
         # Complete HJB residual (primal form)
-        residual = self.V_scale * (V_tilde_t + drift_P + diffusion_P + mixed_PC + 
-                                  advec_Y + drift_C + diffusion_C + source_term - r * V_tilde)
+        residual = V_t + drift_P + diffusion_P + mixed_PC + advec_Y + drift_C + diffusion_C + source_term - r * V
         pde_loss = tf.reduce_mean(tf.square(residual))
 
         # Terminal condition
         t_term_norm, P_term_norm, Y_term_norm, C_term_norm = self.normalize_inputs(t_term, P_term, Y_term, C_term)
-        V_tilde_terminal = self.f_theta(t_term_norm, tf.concat([P_term_norm, Y_term_norm, C_term_norm], axis=1))
+        V_terminal = self.f_theta(t_term_norm, tf.concat([P_term_norm, Y_term_norm, C_term_norm], axis=1))
 
-        terminal_scale = 1 / self.V_scale
-        # penalty = -tf.square(tf.maximum(0.0, Y_term - L)) * terminal_scale
+        # Terminal penalty (no scaling needed)
         zero = tf.constant(0.0, dtype=self.dtype)
-        penalty = - tf.maximum(zero, Y_term - L) * terminal_scale
+        penalty = - tf.maximum(zero, Y_term - L)
 
-
-        V_tilde_terminal = tf.cast(V_tilde_terminal, self.dtype)
-        terminal_errors = V_tilde_terminal - penalty
+        V_terminal = tf.cast(V_terminal, self.dtype)
+        terminal_errors = V_terminal - penalty
         terminal_loss = tf.reduce_mean(tf.square(terminal_errors))
 
         # Concavity penalty (V_PP should be negative)
-        V_tilde_PP_pos = tf.nn.relu(V_tilde_PP)
+        V_PP_pos = tf.nn.relu(V_PP)
         penalty_coeff = tf.constant(1e5, dtype=self.dtype)
-        VPP_penalty = penalty_coeff * tf.reduce_mean(tf.square(V_tilde_PP_pos))
-        VPP_penalty_vec = penalty_coeff * tf.square(V_tilde_PP_pos)
+        VPP_penalty = penalty_coeff * tf.reduce_mean(tf.square(V_PP_pos))
+        VPP_penalty_vec = penalty_coeff * tf.square(V_PP_pos)
 
         return (pde_loss + terminal_loss + VPP_penalty,
                 pde_loss, terminal_loss, VPP_penalty,
@@ -275,31 +264,31 @@ class PIATrainer4D:
 
     @tf.function
     def compute_control_loss(self, t, P, Y, C):
-        # Compute V_tilde and its derivatives
+        # Compute V and its derivatives
         with tf.GradientTape(persistent=True) as tape2:
             tape2.watch([t, P, Y, C])
             with tf.GradientTape(persistent=True) as tape1:
                 tape1.watch([t, P, Y, C])
                 t_norm, P_norm, Y_norm, C_norm = self.normalize_inputs(t, P, Y, C)
-                V_tilde = self.f_theta(t_norm, tf.concat([P_norm, Y_norm, C_norm], axis=1))
-            V_tilde_P = tape1.gradient(V_tilde, P)
+                V = self.f_theta(t_norm, tf.concat([P_norm, Y_norm, C_norm], axis=1))
+            V_P = tape1.gradient(V, P)
             del tape1
-        V_tilde_PP = tape2.gradient(V_tilde_P, P)
-        V_tilde_PC = tape2.gradient(V_tilde_P, C)  # Mixed derivative
+        V_PP = tape2.gradient(V_P, P)
+        V_PC = tape2.gradient(V_P, C)  # Mixed derivative
         del tape2
 
         # Make V_PP strictly away from zero
-        V_tilde_PP_safe = self._safe_pp(V_tilde_PP, eps=1e-5)
+        V_PP_safe = self._safe_pp(V_PP, eps=1e-5)
 
         # Predicted control (unbounded)
         t_norm, P_norm, Y_norm, C_norm = self.normalize_inputs(t, P, Y, C)
-        alpha_tilde = self.g_phi(t_norm, tf.concat([P_norm, Y_norm, C_norm], axis=1))
+        alpha = self.g_phi(t_norm, tf.concat([P_norm, Y_norm, C_norm], axis=1))
 
-        # Map to original units for target and Hamiltonian
-        V_P_orig  = V_tilde_P       * self.V_scale
-        V_PP_orig = V_tilde_PP_safe * self.V_scale
-        V_PC_orig = V_tilde_PC      * self.V_scale
-        alpha_orig = alpha_tilde * self.alpha_scale
+        # No scaling needed for derivatives
+        V_P_orig  = V_P
+        V_PP_orig = V_PP_safe
+        V_PC_orig = V_PC
+        alpha_orig = alpha
 
         # Optimal control with CIR correlation term
         # α* = -(μ V_P + ρσδ√C V_PC) / (σ²P V_PP)
@@ -308,15 +297,15 @@ class PIATrainer4D:
         denominator = sigma**2 * P * V_PP_orig
         
         alpha_optimal_orig = -numerator / denominator
-        alpha_optimal_tilde = tf.stop_gradient(alpha_optimal_orig / self.alpha_scale)
+        alpha_optimal = tf.stop_gradient(alpha_optimal_orig)
 
         # Robust control loss (Huber)
         delta_huber = tf.cast(getattr(self, "huber_delta", 5.0), self.dtype)
         huber = tf.keras.losses.Huber(delta=delta_huber, reduction=tf.keras.losses.Reduction.NONE)
-        loss_vec = huber(alpha_optimal_tilde, alpha_tilde)   # y_true, y_pred
+        loss_vec = huber(alpha_optimal, alpha)   # y_true, y_pred
         loss = tf.reduce_mean(loss_vec)
 
-        # Hamiltonian in original units (for monitoring)
+        # Hamiltonian (for monitoring)
         H = (mu * alpha_orig * P * V_P_orig + 
              0.5 * sigma**2 * alpha_orig**2 * P**2 * V_PP_orig +
              rho * sigma * delta * alpha_orig * P * sqrt_C_safe * V_PC_orig)
@@ -499,29 +488,15 @@ def create_objective_function_4d(PIATrainer4D, DGMNet, domain_bounds, tf_hammers
         np.random.seed(seed)
         random.seed(seed)
 
-        # --- Hyperparams ---
-        base_lr = trial.suggest_float("lr_base", 1e-7, 1e-3, log=True)
-        lr_log_delta = trial.suggest_float("lr_log_delta", -0.5, 0.5)
-        f_lr_initial = base_lr * (10 ** lr_log_delta)
-        g_lr_initial = base_lr * (10 ** -lr_log_delta)
-
-        f_decay_steps = trial.suggest_int('f_decay_steps', 100, 1000, step=50)
-        f_decay_rate  = trial.suggest_float('f_decay_rate', 0.85, 0.99, step=0.01)
-        g_decay_steps = trial.suggest_int('g_decay_steps', 100, 1000, step=50)
-        g_decay_rate  = trial.suggest_float('g_decay_rate', 0.85, 0.99, step=0.01)
-
-        batch_size     = trial.suggest_int('batch_size', 512, 4096, step=256)
-        resample_every = trial.suggest_int('resample_every', 50, 500, step=50)
-
-        k_start         = trial.suggest_float('k_start', 1, 2.0, step=0.1)
-        k_end           = trial.suggest_float('k_end', 2.0, 8.0, step=0.5)
-        k_schedule_steps= trial.suggest_int('k_schedule_steps', 2000, 8000, step=500)
-
-        V_scale     = trial.suggest_float('V_scale', 0.1, 10.0, step=0.1)
-        alpha_scale = trial.suggest_float('alpha_scale', 0.1, 10, log=True)
-
-        n_layers    = trial.suggest_int('n_layers', 3, 13, step=2)
-        layer_width = trial.suggest_int('layer_width', 64, 256, step=32)
+        # --- Simplified Hyperparams ---
+        # Only optimize base learning rate
+        base_lr = trial.suggest_float("lr_base", 1e-5, 1e-3, log=True)
+        
+        # Fixed parameters
+        batch_size = 2816
+        resample_every = trial.suggest_int('resample_every', 50, 500, step=50)  # Keep this tunable
+        n_layers = trial.suggest_int('n_layers', 3, 13, step=2)  # Keep architecture tunable
+        layer_width = trial.suggest_int('layer_width', 64, 256, step=32)  # Keep architecture tunable
 
         try:
             input_dim = 3  # P, Y, C (4D problem: t + 3 spatial dimensions)
@@ -529,11 +504,12 @@ def create_objective_function_4d(PIATrainer4D, DGMNet, domain_bounds, tf_hammers
             f_theta = DGMNet(layer_width=layer_width, n_layers=n_layers, input_dim=input_dim, dtype=dtype)
             g_phi   = DGMNet(layer_width=layer_width, n_layers=n_layers, input_dim=input_dim, final_trans=None, dtype=dtype)
 
+            # Fixed decay schedules
             lr_schedule_f = tf.keras.optimizers.schedules.ExponentialDecay(
-                initial_learning_rate=f_lr_initial, decay_steps=f_decay_steps, decay_rate=f_decay_rate, staircase=True
+                initial_learning_rate=base_lr, decay_steps=250, decay_rate=0.9, staircase=True
             )
             lr_schedule_g = tf.keras.optimizers.schedules.ExponentialDecay(
-                initial_learning_rate=g_lr_initial, decay_steps=g_decay_steps, decay_rate=g_decay_rate, staircase=True
+                initial_learning_rate=base_lr, decay_steps=250, decay_rate=0.9, staircase=True
             )
 
             optimizer_f = tf.keras.optimizers.Adam(learning_rate=lr_schedule_f)
@@ -544,8 +520,7 @@ def create_objective_function_4d(PIATrainer4D, DGMNet, domain_bounds, tf_hammers
                 optimizer_f=optimizer_f, optimizer_g=optimizer_g,
                 domain_bounds=domain_bounds, batch_size=batch_size,
                 candidate_size=candidate_size, resample_every=resample_every,
-                k_start=k_start, k_end=k_end, k_schedule_steps=k_schedule_steps,
-                V_scale=V_scale, alpha_scale=alpha_scale, dtype=dtype
+                dtype=dtype
             )
 
             trainer.train(steps=training_steps, log_every=10)
@@ -631,17 +606,14 @@ def train_with_best_params_4d(study, PIATrainer4D, DGMNet, domain_bounds, tf_ham
     g_phi   = DGMNet(layer_width=best_params['layer_width'], n_layers=best_params['n_layers'],
                      input_dim=input_dim, final_trans=None, dtype=dtype)
 
-    lr_base = best_params['lr_base']; lr_log_delta = best_params['lr_log_delta']
-    f_lr_initial = lr_base * (10 ** lr_log_delta)
-    g_lr_initial = lr_base * (10 ** -lr_log_delta)
+    base_lr = best_params['lr_base']
 
+    # Fixed decay schedules
     lr_schedule_f = tf.keras.optimizers.schedules.ExponentialDecay(
-        initial_learning_rate=f_lr_initial, decay_steps=best_params['f_decay_steps'],
-        decay_rate=best_params['f_decay_rate'], staircase=True
+        initial_learning_rate=base_lr, decay_steps=250, decay_rate=0.9, staircase=True
     )
     lr_schedule_g = tf.keras.optimizers.schedules.ExponentialDecay(
-        initial_learning_rate=g_lr_initial, decay_steps=best_params['g_decay_steps'],
-        decay_rate=best_params['g_decay_rate'], staircase=True
+        initial_learning_rate=base_lr, decay_steps=250, decay_rate=0.9, staircase=True
     )
 
     optimizer_f = tf.keras.optimizers.Adam(learning_rate=lr_schedule_f)
@@ -651,13 +623,9 @@ def train_with_best_params_4d(study, PIATrainer4D, DGMNet, domain_bounds, tf_ham
         value_model=f_theta, control_model=g_phi,
         optimizer_f=optimizer_f, optimizer_g=optimizer_g,
         domain_bounds=domain_bounds,
-        batch_size=best_params['batch_size'],
+        batch_size=2816,  # Fixed batch size
         candidate_size=candidate_size,
         resample_every=best_params['resample_every'],
-        k_start=best_params['k_start'], k_end=best_params['k_end'],
-        k_schedule_steps=best_params['k_schedule_steps'],
-        V_scale=best_params['V_scale'],
-        alpha_scale=best_params['alpha_scale'],
         dtype=dtype,
     )
 
@@ -728,7 +696,7 @@ def plot_optimization_results(study):
         print(f"Plotting failed: {e}")
 
 
-# Final export helpers (keep as full model saves for final artifacts)
+# Final export helpers (simplified metadata)
 def save_model(model, name, experiment_name, metadata=None, base_dir="experiments", history=None, timestamp=None):
     if timestamp is None:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -753,7 +721,7 @@ def save_model(model, name, experiment_name, metadata=None, base_dir="experiment
 
 # CLI
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run 4D HJB PIA Solver with Optuna tuning (CIR process)")
+    parser = argparse.ArgumentParser(description="Run 4D HJB PIA Solver with Optuna tuning (CIR process) - Simplified")
     
     # Original parameters
     parser.add_argument("--mu", type=float, default=0.05)
@@ -778,7 +746,7 @@ def parse_args():
     parser.add_argument("--n_trials", type=int, default=50)
     parser.add_argument("--steps_per_trial", type=int, default=1000)
     parser.add_argument("--final_training_steps", type=int, default=5000)
-    parser.add_argument("--experiment_name", type=str, default="cir_4d_experiment")
+    parser.add_argument("--experiment_name", type=str, default="cir_4d_experiment_simplified")
     parser.add_argument("--candidate_size", type=int, default=100_000)
     parser.add_argument("--seed", type=int, default=3)
     parser.add_argument("--dtype", type=str, default="float64", choices=["float32", "float64"])
@@ -832,10 +800,6 @@ def main():
     best_trial = pick_lexico_best(study)
     best_params = best_trial.params
 
-    lr_base = best_params['lr_base']; lr_log_delta = best_params['lr_log_delta']
-    f_lr_initial = lr_base * (10 ** lr_log_delta)
-    g_lr_initial = lr_base * (10 ** -lr_log_delta)
-
     metadata = {
         "model_parameters": {
             "mu": float(mu.numpy()),
@@ -850,7 +814,7 @@ def main():
             "delta": float(delta.numpy()),
             "rho": float(rho.numpy()),
             "pi": "sqrt(P)",
-            "model_type": "CIR_4D"
+            "model_type": "CIR_4D_Simplified"
         },
         "network_parameters": {
             "n_layers": best_params['n_layers'],
@@ -861,23 +825,17 @@ def main():
             "seed": seed,
             "dtype": args.dtype,
             "lr_base": best_params['lr_base'],
-            "lr_log_delta": best_params['lr_log_delta'],
-            "lr_schedule_f": {
-                "initial_learning_rate": f_lr_initial,
-                "decay_steps": best_params['f_decay_steps'],
-                "decay_rate": best_params['f_decay_rate']
+            "lr_schedule": {
+                "initial_learning_rate": best_params['lr_base'],
+                "decay_steps": 250,
+                "decay_rate": 0.9
             },
-            "lr_schedule_g": {
-                "initial_learning_rate": g_lr_initial,
-                "decay_steps": best_params['g_decay_steps'],
-                "decay_rate": best_params['g_decay_rate']
-            },
-            "batch_size": best_params['batch_size'],
+            "batch_size": 2816,
             "candidate_size": args.candidate_size,
             "resample_every": best_params['resample_every'],
-            "k_start": best_params['k_start'],
-            "k_end": best_params['k_end'],
-            "k_schedule_steps": best_params['k_schedule_steps'],
+            "k_start": 1.0,
+            "k_end": 4.0,
+            "k_schedule_steps": 5000,
         },
         "domain_bounds": {
             "t": [float(domain_bounds[0][0]), float(domain_bounds[0][1])],
@@ -885,8 +843,6 @@ def main():
             "Y": [float(domain_bounds[2][0]), float(domain_bounds[2][1])],
             "C": [float(domain_bounds[3][0]), float(domain_bounds[3][1])]
         },
-        "V_scale": float(trainer.V_scale.numpy()),
-        "alpha_scale": float(trainer.alpha_scale.numpy()),
     }
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
