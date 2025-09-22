@@ -4,3 +4,6 @@ tensorflow[and-cuda]
 matplotlib
 optuna
 tqdm
+ipython
+ipympl
+ipywidgets
