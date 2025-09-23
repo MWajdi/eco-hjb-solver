@@ -15,6 +15,7 @@ The code implements deep learning–based solvers for Hamilton–Jacobi–Bellma
 ├── eco_hjb_cstC.py        
 ├── eco_hjb_cirC.py       
 ├── eco_hjb_cirC_reduced.py
+├── eco_hjb_cstC_reduced.py
 ├── DGM.py                
 ├── hammersley.py         
 ├── experiments/           
@@ -29,6 +30,7 @@ The code implements deep learning–based solvers for Hamilton–Jacobi–Bellma
 - **`eco_hjb_cstC.py`**: solver for the 3D constant-\(C\) model.  
 - **`eco_hjb_cirC.py`**: solver for the 4D CIR-\(C\) model.  
 - **`eco_hjb_cirC_reduced.py`**: simplified CIR solver with fewer hyperparameters.  
+- **`eco_hjb_cstC_reduced.py`**: simplified constant solver with fewer hyperparameters.  
 - **`DGM.py`**: implementation of the DGM architecture used for value and control networks.  
 - **`hammersley.py`**: Hammersley sequence generator for residual-based sampling.  
 - **`experiments/`**: example trained models with high convergence.  
@@ -64,7 +66,7 @@ Python ≥ 3.8 and TensorFlow ≥ 2.9 are required.
 python eco_hjb_cstC.py \
   --mu 0.05 --sigma 0.10 --C 2.0 --a 0.05 --b 0.20 \
   --r 0.05 --T 1.0 --L 0.5 \
-  --n_trials 50 --steps_per_trial 1000 --final_training_steps 5000 \
+  --n_trials 20 --steps_per_trial 500 --final_training_steps 10000 \
   --candidate_size 100000 --seed 3 --dtype float64 \
   --experiment_name base_cst_model
 ```
@@ -144,7 +146,7 @@ The implementation combines several advances in neural PDE solvers:
 
 - **Residual-based adaptive sampling**  
   Nabian, Gladstone & Meidani (2022), *Efficient training of physics-informed neural networks via importance sampling* (arXiv:2207.10289).  
-  Candidate points are generated via a Hammersley sequence and sampled according to residual magnitudes.  
+  Candidate points are sampled according to residual magnitudes.  
 
 ---
 
@@ -293,7 +295,7 @@ python eco_hjb_cirC.py --mu 0.05 --sigma 0.05 --a 0.05 --b 0.2 \
   --r 0.05 --T 1.0 --L 0.5 \
   --kappa 2.0 --beta 1.5 --delta 0.3 --rho -0.5 \
   --C_min 0.1 --C_max 5.0 \
-  --n_trials 50 --steps_per_trial 1000 --final_training_steps 5000
+  --n_trials 20 --steps_per_trial 500 --final_training_steps 10000
 ```
 
 ### Arguments
@@ -343,8 +345,8 @@ python eco_hjb_cirC_reduced.py \
   --r 0.05 --T 1.0 --L 0.5 \
   --kappa 2.0 --beta 1.5 --delta 0.3 --rho -0.5 \
   --C_min 0.1 --C_max 5.0 \
-  --n_trials 20 --steps_per_trial 600 --final_training_steps 3000 \
-  --candidate_size 60000 --dtype float64 \
+  --n_trials 5 --steps_per_trial 500 --final_training_steps 5000 \
+  --candidate_size 100000 --dtype float32 \
   --experiment_name cir_reduced
 ```
 
@@ -354,8 +356,9 @@ python eco_hjb_cirC_reduced.py \
 python eco_hjb_cstC_reduced.py \
   --mu 0.05 --sigma 0.10 --C 2.0 --a 0.05 --b 0.2 \
   --r 0.05 --T 1.0 --L 0.5 \
-  --n_trials 20 --steps_per_trial 600 --final_training_steps 3000 \
-  --candidate_size 60000 --dtype float64 \
+  --n_trials 5 --steps_per_trial 500 --final_training_steps 3000 \
+  --candidate_size 100000 --dtype float32 \
   --experiment_name cst_reduced
 ```
+
 
