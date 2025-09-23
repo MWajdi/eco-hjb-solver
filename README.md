@@ -361,4 +361,111 @@ python eco_hjb_cstC_reduced.py \
   --experiment_name cst_reduced
 ```
 
+## Notebooks
+
+Two Jupyter notebooks under `notebooks/` provide **post-training analysis and visualization** for experiments saved by the solvers:
+
+- `notebooks/analyze_constantC_results_.ipynb` — analysis tools for the **constant-C (3D)** model trained by `eco_hjb_cstC.py`.
+- `notebooks/analyze_CIR_results_4D.ipynb` — analysis tools for the **CIR-C (4D)** model trained by `eco_hjb_cirC.py`.
+
+Both notebooks center on an `Experiment` class that loads a trained run (a directory created by the solver containing `f_theta.keras`, `g_phi.keras`, `metadata.json`, and optionally `training_history.csv`).
+
+### Quickstart (either notebook)
+
+```python
+# Point to an experiment directory produced by a solver run:
+exp = Experiment("experiments/base_cst_model")   # for constant-C
+# or
+exp = Experiment("experiments/base_cir_model")   # for CIR-C
+```
+
+The experiment folder **must** contain:
+- `f_theta.keras` and `g_phi.keras` (saved Keras models),
+- `metadata.json` (model/network/training/domain metadata, plus `V_scale` and `alpha_scale`),
+- `training_history.csv` (loss curves; optional but recommended).
+
+> For interactive 3D widgets:  
+> `pip install ipympl` then enable `%matplotlib widget` in the notebook.
+
+---
+
+### `analyze_constantC_results_.ipynb` (3D, constant \(C\))
+
+**Class**
+
+```python
+class Experiment:
+    def __init__(self, folder_path: str): ...
+```
+
+**Metadata loaded**
+
+- `model_parameters`: `mu`, `sigma`, `C`, `a`, `b`, `r`, `T`, `L`, `pi` (string expression, e.g., `"sqrt(P)"`).
+- `network_parameters`: `n_layers`, `layer_width`, `input_dim` (expected `2` for `(P, Y)`).
+- `training_parameters`: `seed`, `dtype`, LR schedules, `batch_size`, `candidate_size`, residual-sampling params.
+- `domain_bounds`: dict with keys `"t"`, `"P"`, `"Y"` mapped to `[min, max]`.
+- `V_scale`, `alpha_scale`: output scalings used in training.
+- `history`: from `training_history.csv` (if present).
+
+**Loaded models**
+
+- `f_theta`: value network.
+- `g_phi`: control network.
+
+**Key methods**
+
+- `plot_history()`  
+  Plots total/PDE/terminal losses and control loss (log-scaled).
+
+- `animate_primal_hjb_slice(P_points=60, Y_points=60, frames=60)`  
+  Time animation (3D surfaces) of:
+  - value \(V\), HJB residual, control \(\alpha\), and second derivative \(V_{PP}\) (concavity check).  
+  Uses normalized inputs internally and re-applies scaling:  
+  \(V = \texttt{V\_scale}\, \tilde V\), \(\alpha = \texttt{alpha\_scale}\, \tilde \alpha\).
+
+- `plot_sample_trajectories(T_steps=200, N_paths=6, seed=None, P0=0.6, Y0=0.0)`  
+  Simulates controlled/uncontrolled \(P_t\), \(Y_t\), and \(\alpha_t\); prints \(V(0,P_0,Y_0)\) (scaled) and the simulated discounted reward  
+  \(\int_0^T e^{-rt}\,\pi(P_t)\,dt - e^{-rT}\max(0, Y_T - L)\).
+
+- `plot_trajectories_by_initial_P(P0_list, T_steps=200, seed=None)`  
+  Faceted trajectories across several \(P_0\); overlays the emission threshold \(L\) on \(Y(t)\).
+
+---
+
+### `analyze_CIR_results_4D.ipynb` (4D, CIR emission factor)
+
+**Class**
+
+```python
+class Experiment:
+    def __init__(self, folder_path: str): ...
+```
+
+**Metadata loaded**
+
+- `model_parameters`: `mu`, `sigma`, `a`, `b`, `r`, `T`, `L`, **CIR params** `kappa`, `beta`, `delta`, `rho`, and `pi` (string).
+- `network_parameters`: `n_layers`, `layer_width`, `input_dim` (expected `3` for `(P, Y, C)`).
+- `training_parameters`, `domain_bounds` (keys `"t"`, `"P"`, `"Y"`, `"C"`), `V_scale`, `alpha_scale`, `history`.
+
+**Loaded models**
+
+- `f_theta`: value network.
+- `g_phi`: control network.
+
+**Key methods**
+
+- `plot_history()`  
+  Same as constant-C.
+
+- `animate_primal_hjb_slice(P_points=60, Y_points=60, slider_dim='C', slider_values=None)`  
+  **Interactive 4D slice viewer** with two sliders (time and one chosen dimension in `{'P','Y','C'}`); renders \(V\), HJB residual, \(\alpha\), and \(V_{PP}\).
+
+- `plot_static_slice(t_val=None, C_val=None, P_points=100, Y_points=100, slider_dim='C')`  
+  Fixed-time slice visualization over any two dimensions while holding one dimension constant.
+
+- `plot_sample_trajectories(T_steps=200, N_paths=6, seed=None, P0=0.6, Y0=0.0, C0=1.5)`  
+  Simulates correlated dynamics of \(P_t, Y_t, C_t\) (CIR for \(C_t\)) under the learned control and reports \(V(0,P_0,Y_0,C_0)\) (scaled) and the discounted reward.
+
+- `plot_trajectories_by_initial_P(P0_list, T_steps=200, seed=None, Y0=0.0, C0=1.5)`  
+  Faceted trajectories across several \(P_0\); overlays \(L\) on \(Y(t)\).
 
