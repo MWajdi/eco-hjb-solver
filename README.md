@@ -331,3 +331,31 @@ with terminal condition $`V(T,P,Y,C) = -\max(0,\,Y-L)`$.
 
 The training algorithm, loss definitions, and residual-based sampling are **the same as in `eco_hjb_cstC.py`**, with the only change being the extended residual that includes the CIR drift/diffusion in $`C_t`$ and the mixed derivative $`V_{PC}`$.  
 
+## `eco_hjb_cirC_reduced.py` and `eco_hjb_cstC_reduced.py`
+
+These scripts mirror the full solvers but **constrain the hyperparameter search** by (i) fixing several hyperparameters to values known to work well in this problem class, and (ii) restricting search ranges to neighborhoods where near-optimal values typically lie. This yields **faster studies** that still converge reliably in most regimes.
+
+### Quickstart — `eco_hjb_cirC_reduced.py`
+
+```bash
+python eco_hjb_cirC_reduced.py \
+  --mu 0.05 --sigma 0.05 --a 0.05 --b 0.2 \
+  --r 0.05 --T 1.0 --L 0.5 \
+  --kappa 2.0 --beta 1.5 --delta 0.3 --rho -0.5 \
+  --C_min 0.1 --C_max 5.0 \
+  --n_trials 20 --steps_per_trial 600 --final_training_steps 3000 \
+  --candidate_size 60000 --dtype float64 \
+  --experiment_name cir_reduced
+```
+
+### Quickstart — `eco_hjb_cstC_reduced.py`
+
+```bash
+python eco_hjb_cstC_reduced.py \
+  --mu 0.05 --sigma 0.10 --C 2.0 --a 0.05 --b 0.2 \
+  --r 0.05 --T 1.0 --L 0.5 \
+  --n_trials 20 --steps_per_trial 600 --final_training_steps 3000 \
+  --candidate_size 60000 --dtype float64 \
+  --experiment_name cst_reduced
+```
+
